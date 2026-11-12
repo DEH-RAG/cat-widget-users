@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from cat import BillTheLizard, hook, log
 
@@ -33,9 +33,15 @@ async def after_lizard_bootstrap(lizard: BillTheLizard):
         white_rabbit.remove_job(PURGE_JOB_ID)
         return
 
+    # APScheduler's IntervalTrigger picks the first fire on the interval grid anchored
+    # at start_date, rounding UP to the next slot after "now". Starting exactly one
+    # interval in the past would therefore still compute "now + interval" (the tiny
+    # delay between computing start_date and registering the job pushes it into the
+    # next slot). With one second of headroom the first fire lands at ~now, while
+    # subsequent runs keep the requested cadence.
     white_rabbit.schedule_interval_job(
         job=purge_widget_users_job,
         job_id=PURGE_JOB_ID,
         hours=cleanup_every_hours,
-        start_date=datetime.now(UTC),
+        start_date=datetime.now(UTC) - timedelta(hours=cleanup_every_hours) + timedelta(seconds=1),
     )

@@ -6,7 +6,7 @@ if __name__ == "__main__":
     import subprocess
     import sys
     from contextlib import contextmanager
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime, timedelta
     from unittest.mock import patch
 
     # Import-time requirements of the core package; no connection is ever opened here
@@ -273,6 +273,68 @@ if __name__ == "__main__":
         assert len(stats["errors"]) == 1, stats
         assert "redis down" in stats["errors"][0], stats
 
+    def test_first_purge_runs_immediately():
+        main = importlib.import_module("main")
+        scheduled = []
+        removed = []
+        cleanup_hours = 24
+
+        class FakeWhiteRabbit:
+            def schedule_interval_job(self, **kwargs):
+                scheduled.append(kwargs)
+
+            def remove_job(self, job_id):
+                removed.append(job_id)
+
+        class FakePlugin:
+            async def load_settings(self):
+                return {"cleanup_every_hours": cleanup_hours}
+
+        class FakePluginManager:
+            def get_plugin(self):
+                return FakePlugin()
+
+        class FakeLizard:
+            def __init__(self):
+                self.white_rabbit = FakeWhiteRabbit()
+                self.plugin_manager = FakePluginManager()
+
+        schedule_hook = getattr(main.after_lizard_bootstrap, "function", main.after_lizard_bootstrap)
+        before = datetime.now(UTC)
+        asyncio.run(schedule_hook(FakeLizard()))
+        after = datetime.now(UTC)
+
+        assert len(scheduled) == 1, scheduled
+        kwargs = scheduled[0]
+        assert kwargs["hours"] == cleanup_hours, kwargs
+        assert kwargs["job_id"] == purge.PURGE_JOB_ID, kwargs
+
+        start_date = kwargs["start_date"]
+        interval = timedelta(hours=cleanup_hours)
+        # start_date is roughly one interval in the past, so APScheduler's first fire
+        # lands at "now" instead of a full interval later.
+        assert start_date < before, (start_date, before)
+        assert abs((before - start_date) - interval) < timedelta(minutes=1), (
+            before, start_date,
+        )
+        first_fire = start_date + interval
+        assert before <= first_fire <= after + timedelta(seconds=2), (start_date, first_fire)
+        assert removed == [], removed
+
+        scheduled.clear()
+
+        class DisabledPlugin(FakePlugin):
+            async def load_settings(self):
+                return {"cleanup_every_hours": 0}
+
+        disabled_lizard = FakeLizard()
+        disabled_lizard.plugin_manager = type(
+            "PM", (), {"get_plugin": lambda self: DisabledPlugin()}
+        )()
+        asyncio.run(schedule_hook(disabled_lizard))
+        assert scheduled == [], scheduled
+        assert removed == [purge.PURGE_JOB_ID], removed
+
     def test_import_safety():
         files = sorted(glob.glob(os.path.join(plugin_dir, "**", "*.py"), recursive=True))
         assert files, "no python files found"
@@ -304,6 +366,7 @@ if __name__ == "__main__":
         ("per-user isolation", test_per_user_isolation),
         ("dry-run writes nothing", test_dry_run_writes_nothing),
         ("get_users error reported", test_get_users_error_is_reported),
+        ("first purge runs immediately", test_first_purge_runs_immediately),
         ("import safety of every plugin .py", test_import_safety),
     ]
 
