@@ -26,6 +26,8 @@ if __name__ == "__main__":
     NOW_TS = NOW.timestamp()
     DAY = 86400
     AGENT = "__widget_django__"
+    WIDGET_USERNAME = "8b7c360596c94f7493f746cde39c3cb1"
+    DEFAULT_PATTERNS = ["^[0-9a-f]{32}$"]
 
     passed = 0
     failed = []
@@ -41,9 +43,18 @@ if __name__ == "__main__":
             passed += 1
             print(f"PASS {name}")
 
-    def make_user(role="anonym-user", created_at=NOW_TS - 8 * DAY, updated_at=NOW_TS - 8 * DAY):
-        return {"role": role, "username": "0123456789abcdef0123456789abcdef",
-                "created_at": created_at, "updated_at": updated_at}
+    def make_user(username=WIDGET_USERNAME, created_at=NOW_TS - 8 * DAY,
+                  updated_at=NOW_TS - 8 * DAY, **extra):
+        user = {
+            "id": "user-id",
+            "username": username,
+            "permissions": {},
+            "metadata": {},
+            "created_at": created_at,
+            "updated_at": updated_at,
+        }
+        user.update(extra)
+        return user
 
     @contextmanager
     def fake_crud(users_by_agent, owned_chats=None, fail_delete=()):
@@ -88,7 +99,8 @@ if __name__ == "__main__":
         retention_days=7,
         retention_basis="created_at",
         agent_ids=None,
-        user_role="anonym-user",
+        username_patterns=None,
+        user_role=None,
         dry_run=False,
         now=NOW,
     ):
@@ -97,18 +109,23 @@ if __name__ == "__main__":
                 retention_days=retention_days,
                 retention_basis=retention_basis,
                 agent_ids=agent_ids if agent_ids is not None else [AGENT],
+                username_patterns=(
+                    username_patterns
+                    if username_patterns is not None
+                    else list(DEFAULT_PATTERNS)
+                ),
                 user_role=user_role,
                 dry_run=dry_run,
                 now=now,
             )
         )
 
-    def test_role_filter():
+    def test_username_pattern_selection():
         users = {
             AGENT: {
-                "widget": make_user(role="anonym-user"),
-                "admin": make_user(role="admin"),
-                "other": make_user(role="user"),
+                "widget": make_user(username=WIDGET_USERNAME),
+                "admin": make_user(username="admin"),
+                "other": make_user(username="Alice"),
             }
         }
         with fake_crud(users) as fake:
@@ -117,6 +134,45 @@ if __name__ == "__main__":
         assert stats["candidates"] == 1, stats
         assert stats["deleted_users"] == 1, stats
         assert fake["deleted_users"] == ["widget"], fake
+
+    def test_non_matching_username_is_not_selected_even_if_old():
+        users = {
+            AGENT: {
+                "admin": make_user(
+                    username="admin", created_at=NOW_TS - 365 * DAY,
+                    updated_at=NOW_TS - 365 * DAY,
+                ),
+            }
+        }
+        with fake_crud(users) as fake:
+            report = run()
+        stats = report["agents"][AGENT]
+        assert stats["candidates"] == 0, stats
+        assert fake["deleted_users"] == [], fake
+
+    def test_optional_role_filter():
+        users = {
+            AGENT: {
+                "anon": make_user(username=WIDGET_USERNAME, role="anonym-user"),
+                "staff": make_user(
+                    username="f" * 32, role="admin"
+                ),
+            }
+        }
+        with fake_crud(users) as fake:
+            no_role = run()
+        assert no_role["agents"][AGENT]["candidates"] == 2, no_role
+        assert sorted(fake["deleted_users"]) == ["anon", "staff"], fake
+
+        with fake_crud(users) as fake:
+            only_anon = run(user_role="anonym-user")
+        assert only_anon["agents"][AGENT]["candidates"] == 1, only_anon
+        assert fake["deleted_users"] == ["anon"], fake
+
+        with fake_crud(users) as fake:
+            only_admin = run(user_role="admin")
+        assert only_admin["agents"][AGENT]["candidates"] == 1, only_admin
+        assert fake["deleted_users"] == ["staff"], fake
 
     def test_basis_created_at_vs_updated_at():
         users = {
@@ -153,8 +209,7 @@ if __name__ == "__main__":
         users = {
             AGENT: {
                 "no_timestamp": {
-                    "role": "anonym-user",
-                    "username": "abc",
+                    "username": WIDGET_USERNAME,
                 }
             }
         }
@@ -239,7 +294,9 @@ if __name__ == "__main__":
             assert result.stdout == "", f"import {name} printed on stdout: {result.stdout!r}"
 
     tests = [
-        ("role filter", test_role_filter),
+        ("username pattern selection", test_username_pattern_selection),
+        ("non-matching username never selected", test_non_matching_username_is_not_selected_even_if_old),
+        ("optional role filter", test_optional_role_filter),
         ("created_at vs updated_at selection", test_basis_created_at_vs_updated_at),
         ("age boundary", test_age_boundary),
         ("missing timestamp skipped", test_missing_timestamp_is_skipped),

@@ -40,9 +40,22 @@ if __name__ == "__main__":
             help=f"Timestamp used to compute age (default: {defaults.retention_basis}).",
         )
         parser.add_argument(
+            "--username-pattern",
+            dest="username_patterns",
+            action="append",
+            metavar="REGEX",
+            help=(
+                "Only delete users whose username full-matches this regex; repeatable. "
+                "Defaults to the plugin settings: " + ", ".join(defaults.username_patterns)
+            ),
+        )
+        parser.add_argument(
             "--role",
             default=defaults.user_role,
-            help=f"Only delete users with this role (default: {defaults.user_role}).",
+            help=(
+                "Optional: only delete users with this role "
+                f"(default: {defaults.user_role})."
+            ),
         )
         mode = parser.add_mutually_exclusive_group()
         mode.add_argument(
@@ -93,12 +106,14 @@ if __name__ == "__main__":
 
     defaults = PluginSettings()
     agent_ids = args.agents or list(defaults.agent_ids)
+    username_patterns = args.username_patterns or list(defaults.username_patterns)
 
     report = asyncio.run(
         purge_widget_users(
             retention_days=args.retention_days,
             retention_basis=args.basis,
             agent_ids=agent_ids,
+            username_patterns=username_patterns,
             user_role=args.role,
             dry_run=dry_run,
         )

@@ -9,7 +9,8 @@ class PluginSettings(BaseModel):
     retention_days: int = 7
     retention_basis: Literal["created_at", "updated_at"] = "created_at"
     agent_ids: list[str] = ["__widget_django__"]
-    user_role: str = "anonym-user"
+    username_patterns: list[str] = ["^[0-9a-f]{32}$"]
+    user_role: str | None = None
     cleanup_every_hours: int = 24
 
 

@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,26 +31,38 @@ async def purge_widget_users(
     retention_days: int,
     retention_basis: str,
     agent_ids: list[str],
-    user_role: str,
+    username_patterns: list[str],
+    user_role: str | None = None,
     dry_run: bool = False,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Delete widget users older than ``retention_days`` and cascade their conversations.
 
-    A user is a candidate when its role equals ``user_role`` and its
-    ``retention_basis`` timestamp is at least ``retention_days`` old. Rows without
-    the timestamp are skipped. Deletion cascades in this order: release the owned
-    chats, delete the conversations, then delete the user. Each user is isolated:
-    a failure on one is recorded and processing continues with the next.
+    A user is a candidate when its ``username`` full-matches at least one of
+    ``username_patterns``, (when ``user_role`` is set) its ``role`` equals
+    ``user_role``, and its ``retention_basis`` timestamp is at least
+    ``retention_days`` old. Rows without the timestamp are skipped. Deletion
+    cascades in this order: release the owned chats, delete the conversations,
+    then delete the user. Each user is isolated: a failure on one is recorded and
+    processing continues with the next.
     """
     now_dt = now or datetime.now(UTC)
     now_ts = now_dt.timestamp()
     retention_seconds = float(retention_days) * SECONDS_PER_DAY
 
+    compiled_patterns: list[re.Pattern[str]] = []
+    pattern_errors: list[str] = []
+    for pattern in username_patterns:
+        try:
+            compiled_patterns.append(re.compile(pattern))
+        except re.error as exc:
+            pattern_errors.append(f"invalid username pattern {pattern!r}: {exc}")
+
     report: dict[str, Any] = {"agents": {}, "totals": _empty_stats()}
 
     for agent_id in agent_ids:
         stats = _empty_stats()
+        stats["errors"].extend(pattern_errors)
         report["agents"][agent_id] = stats
 
         try:
@@ -61,7 +74,16 @@ async def purge_widget_users(
             continue
 
         for user_id, user in (users or {}).items():
-            if not isinstance(user, dict) or user.get("role") != user_role:
+            if not isinstance(user, dict):
+                continue
+
+            username = user.get("username")
+            if not isinstance(username, str) or not any(
+                pattern.fullmatch(username) for pattern in compiled_patterns
+            ):
+                continue
+
+            if user_role is not None and user.get("role") != user_role:
                 continue
 
             raw_timestamp = user.get(retention_basis)
@@ -128,6 +150,9 @@ async def purge_widget_users_job() -> None:
             retention_days=int(settings.get("retention_days", defaults.retention_days)),
             retention_basis=settings.get("retention_basis", defaults.retention_basis),
             agent_ids=list(settings.get("agent_ids", defaults.agent_ids)),
+            username_patterns=list(
+                settings.get("username_patterns", defaults.username_patterns)
+            ),
             user_role=settings.get("user_role", defaults.user_role),
         )
         log.info(f"[cat_widget_users] purge completed: {report['totals']}")

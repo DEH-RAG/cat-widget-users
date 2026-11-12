@@ -9,8 +9,8 @@ The Django widget creates a fresh anonymous user for every browser session:
 
 - the agent id is configurable (default `__widget_django__`, multiple widgets may use
   different agent ids);
-- the role is `anonym-user`;
-- the username is a random 32-character hex string;
+- the role is not used for matching (widget users carry no `role` field);
+- the username is a random 32-character lowercase hex string;
 - the user document lives at `agents:<agent>:users:<user>`;
 - conversations live at `agents:<agent>:conversations:<user>:<chat>`.
 
@@ -20,8 +20,9 @@ Without this plugin every widget session leaves permanent Redis keys behind.
 
 ## What it does
 
-For each configured agent it selects users whose `role` matches `user_role` and whose
-retention timestamp is at least `retention_days` old, then cascades:
+For each configured agent it selects users whose `username` full-matches at least
+one of `username_patterns`, optionally requires a `role` when `user_role` is set,
+and whose retention timestamp is at least `retention_days` old, then cascades:
 
 1. `get_owned_chats` → `release_conversation` for every owned chat;
 2. `delete_conversations` for the user;
@@ -37,7 +38,8 @@ continues. Users without the selected timestamp are skipped.
 | `retention_days` | int | `7` | Delete users older than this many days. |
 | `retention_basis` | `created_at` \| `updated_at` | `created_at` | Timestamp used to compute age. |
 | `agent_ids` | list[str] | `["__widget_django__"]` | Agent ids to clean. |
-| `user_role` | str | `anonym-user` | Only users with this role are deleted. |
+| `username_patterns` | list[str] | `["^[0-9a-f]{32}$"]` | Regexes full-matched against `username`; any match selects the user. |
+| `user_role` | str \| null | `null` | Optional extra filter: when set, `role` must equal it; when `null`, ignored. |
 | `cleanup_every_hours` | int | `24` | Interval of the scheduled job. `0` disables it. |
 
 Settings are read through the plugin settings mechanism (`lizard.plugin_manager
@@ -89,7 +91,7 @@ python scripts/purge_widget_users.py --apply         # delete
 python scripts/purge_widget_users.py \
     --agent __widget_django__ --agent __widget_other__ \
     --retention-days 14 --basis updated_at \
-    --role anonym-user --apply
+    --username-pattern '^[0-9a-f]{32}$' --apply
 ```
 
 Arguments:
@@ -97,7 +99,8 @@ Arguments:
 - `--agent AGENT_ID` — repeatable; defaults to the settings `agent_ids`.
 - `--retention-days N` — defaults to the settings value.
 - `--basis {created_at,updated_at}` — defaults to the settings value.
-- `--role ROLE` — defaults to the settings value.
+- `--username-pattern REGEX` — repeatable; defaults to the settings `username_patterns`.
+- `--role ROLE` — optional; defaults to the settings `user_role` (which is `null` by default).
 - `--dry-run` — default mode; prints the plan and writes nothing.
 - `--apply` — performs the deletion.
 - `--json` — print the full report as JSON.
@@ -117,9 +120,9 @@ cd /root/git/grinning-cat-core
 .venv/bin/python /root/git/plugins/cat-widget-users/tests/test_purge.py
 ```
 
-It fakes the CRUD modules and covers role filtering, `created_at` vs `updated_at`,
-the age boundary, cascade order, per-user isolation, dry-run safety, and import-safety
-of every plugin `.py` file.
+It fakes the CRUD modules and covers username-pattern selection, the optional role
+filter, `created_at` vs `updated_at`, the age boundary, cascade order, per-user
+isolation, dry-run safety, and import-safety of every plugin `.py` file.
 
 ## Import safety
 
