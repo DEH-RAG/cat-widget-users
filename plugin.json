@@ -1,0 +1,9 @@
+{
+    "id": "cat_widget_users",
+    "name": "Widget Users Retention",
+    "description": "Automatically deletes throwaway widget users (anonymous sessions) and their conversations after a configurable retention period.",
+    "version": "0.1.0",
+    "author_name": "DEH-RAG",
+    "tags": "widget, users, retention, cleanup, cron, housekeeping",
+    "dependencies": ["base_plugin", "white_rabbit"]
+}
